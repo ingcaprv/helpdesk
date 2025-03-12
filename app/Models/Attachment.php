@@ -12,6 +12,10 @@ class Attachment extends Model
         return $this->morphMany(Attachment::class, 'attachable');
     }
 
+    public function ticket()
+    {
+        return $this->belongsTo(Ticket::class);
+    }
 // app/Models/Attachment.php
     public function attachable()
     {

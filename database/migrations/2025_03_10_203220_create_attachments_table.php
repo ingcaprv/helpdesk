@@ -16,12 +16,9 @@ return new class extends Migration
             $table->string('original_name');
             $table->string('path');
             $table->string('mime_type');
-            $table->unsignedBigInteger('attachable_id');
-            $table->string('attachable_type');
-            $table->foreignId('user_id')->constrained()->cascadeOnDelete();
+            $table->foreignId('ticket_id')->constrained()->onDelete('cascade'); // Relación con tickets
+            $table->foreignId('user_id')->constrained()->onDelete('cascade');   // Relación con usuarios
             $table->timestamps();
-
-            $table->index(['attachable_id', 'attachable_type']);
         });
     }
 

@@ -2,94 +2,176 @@
 
 namespace App\Http\Controllers;
 
+use App\Enums\TicketStatus;
+use App\Enums\TicketCategory;
 use App\Models\Ticket;
-use Illuminate\Http\Request;
+use App\Http\Requests\StoreTicketRequest;
+use App\Notifications\TicketClosed;
+use App\Notifications\TicketReopened;
+use Illuminate\Http\RedirectResponse;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
+use Illuminate\View\View;
 
 class TicketController extends Controller
 {
-    /**
-     * Display a listing of the resource.
-     */
-    // app/Http/Controllers/TicketController.php
-    public function index()
+    public function index(): View
     {
         return view('tickets.index', [
-            'tickets' => auth()->user()->tickets()->with('comments')->latest()->get()
+            'tickets' => auth()->user()->tickets()
+                ->with(['comments', 'attachments', 'assignedTo'])
+                ->latest()
+                ->paginate(10)
         ]);
     }
 
-    public function show(Ticket $ticket)
+    public function create(): View
+    {
+        return view('tickets.create', [
+            'categories' => TicketCategory::cases()
+        ]);
+    }
+
+    public function store(StoreTicketRequest $request): RedirectResponse
+    {
+        try {
+            $ticket = $request->user()->tickets()->create([
+                'title' => $request->validated('title'),
+                'description' => $request->validated('description'),
+                'category' => $request->validated('category'),
+                'status' => TicketStatus::Open->value
+            ]);
+
+            $this->handleAttachments($request, $ticket);
+
+            return redirect()->route('tickets.show', $ticket)
+                ->with('success', 'Ticket creado exitosamente');
+
+        } catch (\Exception $e) {
+            Log::error('Error al crear ticket: ' . $e->getMessage());
+            return back()->with('error', 'Error al crear el ticket');
+        }
+    }
+
+    public function show(Ticket $ticket): View
     {
         $this->authorize('view', $ticket);
 
         return view('tickets.show', [
-            'ticket' => $ticket->load('comments.user')
+            'ticket' => $ticket->load([
+                'comments.user',
+                'attachments',
+                'assignedTo',
+                'user'
+            ])
         ]);
     }
 
-    public function destroy(Ticket $ticket)
+    public function destroy(Ticket $ticket): RedirectResponse
     {
         $this->authorize('delete', $ticket);
 
-        $ticket->delete();
-        return redirect()->route('tickets.index');
-    }
-    // En TicketController
-    public function store(Request $request)
-    {
-        $validated = $request->validate([
-            'title' => 'required|max:255',
-            'description' => 'required',
-            'category' => 'required',
-            'attachments.*' => 'file|max:5120|mimes:jpg,png,pdf,docx' // 5MB máximo
-        ]);
+        try {
+            $ticket->delete();
+            return redirect()->route('tickets.index')
+                ->with('success', 'Ticket eliminado correctamente');
 
-        $ticket = auth()->user()->tickets()->create($validated);
-
-        if ($request->hasFile('attachments')) {
-            foreach ($request->file('attachments') as $file) {
-                $this->storeAttachment($file, $ticket);
-            }
+        } catch (\Exception $e) {
+            Log::error('Error eliminando ticket: ' . $e->getMessage());
+            return back()->with('error', 'Error al eliminar el ticket');
         }
-
-        return redirect()->route('tickets.show', $ticket);
     }
 
-    private function storeAttachment($file, $model)
-    {
-        $originalName = $file->getClientOriginalName();
-        $filename = Str::uuid() . '.' . $file->extension();
-        $path = $file->storeAs('attachments/' . date('Y/m'), $filename, 'public');
-
-        return $model->attachments()->create([
-            'original_name' => $originalName,
-            'path' => $path,
-            'mime_type' => $file->getMimeType(),
-            'user_id' => auth()->id()
-        ]);
-    }
-
-    // Método para cambiar estado
-    public function toggleStatus(Ticket $ticket)
+    public function toggleStatus(Ticket $ticket): RedirectResponse
     {
         $this->authorize('update', $ticket);
 
-        $ticket->update([
-            'status' => $ticket->status === 'open' ? 'closed' : 'open'
-        ]);
+        try {
+            $newStatus = $ticket->status === TicketStatus::Open
+                ? TicketStatus::Closed
+                : TicketStatus::Open;
 
-        return back()->with('status', 'Estado actualizado');
+            $ticket->update(['status' => $newStatus]);
+            $this->sendStatusNotification($ticket, $newStatus);
+
+            return back()->with('success', "Estado actualizado a: " . TicketStatus::from($newStatus)->label());
+
+        } catch (\Exception $e) {
+            Log::error('Error cambiando estado: ' . $e->getMessage());
+            return back()->with('error', 'Error al cambiar el estado');
+        }
     }
 
-// Método para asignar tickets (admin)
-    public function assign(Request $request, Ticket $ticket)
+    public function assign(Request $request, Ticket $ticket): RedirectResponse
     {
+        $this->authorize('assign', $ticket);
+
         $validated = $request->validate([
             'user_id' => 'required|exists:users,id'
         ]);
 
-        $ticket->update(['assigned_to' => $validated['user_id']]);
+        try {
+            $ticket->update(['assigned_to' => $validated['user_id']]);
+            return redirect()->route('tickets.show', $ticket)
+                ->with('success', 'Ticket asignado correctamente');
 
-        return redirect()->route('tickets.show', $ticket);
+        } catch (\Exception $e) {
+            Log::error('Error asignando ticket: ' . $e->getMessage());
+            return back()->with('error', 'Error al asignar el ticket');
+        }
+    }
+
+    private function handleAttachments($request, $model): void
+    {
+        try {
+            if ($request->hasFile('attachments')) {
+                foreach ($request->file('attachments') as $file) {
+                    $this->storeAttachment($file, $model);
+                }
+            }
+        } catch (\Exception $e) {
+            Log::error('Error manejando adjuntos: ' . $e->getMessage());
+            throw $e;
+        }
+    }
+
+    private function storeAttachment($file, $model): void
+    {
+        try {
+            $path = $file->store(
+                'attachments/' . date('Y/m'),
+                'public'
+            );
+
+            $model->attachments()->create([
+                'original_name' => $file->getClientOriginalName(),
+                'path' => $path,
+                'mime_type' => $file->getMimeType(),
+                'user_id' => auth()->id()
+            ]);
+
+        } catch (\Exception $e) {
+            Log::error('Error subiendo archivo: ' . $e->getMessage());
+            throw $e;
+        }
+    }
+
+    private function sendStatusNotification(Ticket $ticket, string $status): void
+    {
+        try {
+            $notification = $status === TicketStatus::Closed
+                ? new TicketClosed($ticket)
+                : new TicketReopened($ticket);
+
+            $ticket->user->notify($notification);
+
+            if ($ticket->assigned_to) {
+                $ticket->assignedTo->notify($notification);
+            }
+
+        } catch (\Exception $e) {
+            Log::error('Error enviando notificación: ' . $e->getMessage());
+        }
     }
 }

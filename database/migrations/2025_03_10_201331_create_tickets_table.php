@@ -16,15 +16,12 @@ return new class extends Migration
             $table->string('title');
             $table->text('description');
             $table->foreignId('user_id')->constrained()->cascadeOnDelete();
-            $table->string('status')->default('open');
+            $table->enum('status', ['open', 'closed'])->default('open');
             $table->string('category');
             $table->timestamps();
         });
     }
 
-    /**
-     * Reverse the migrations.
-     */
     public function down(): void
     {
         Schema::dropIfExists('tickets');
