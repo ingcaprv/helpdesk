@@ -17,7 +17,7 @@ return new class extends Migration
             $table->text('description');
             $table->foreignId('user_id')->constrained()->cascadeOnDelete();
             $table->enum('status', ['open', 'closed'])->default('open');
-            $table->string('category');
+            $table->string('category')->default('technical');
             $table->timestamps();
         });
     }

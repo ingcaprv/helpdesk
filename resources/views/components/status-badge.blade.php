@@ -8,5 +8,5 @@
 @endphp
 
 <span class="inline-flex items-center px-3 py-1 text-sm font-medium rounded-full {{ $colors[$status] ?? 'bg-gray-100 text-gray-800' }}">
-    {{ App\Enums\TicketStatus::tryFrom(strtolower($status))?->label() ?? 'Estado desconocido' }}
+   {{ App\Enums\TicketStatus::tryFrom(strtolower($status))?->label() ?? 'Estado desconocido' }}
 </span>

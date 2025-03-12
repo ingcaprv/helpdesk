@@ -129,9 +129,8 @@ class Ticket extends Model
     }
 
     // App\Models\Ticket.php
-    public function assignedTo()
+    public function assignedTo(): BelongsTo
     {
-        // Ejemplo: si un Ticket pertenece a un User (asignado)
-        return $this->belongsTo(User::class, 'assigned_to'); // Ajusta según tu estructura
+        return $this->belongsTo(User::class, 'assigned_to'); // Ajusta según tu DB
     }
 }
